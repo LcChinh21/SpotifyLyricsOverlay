@@ -6,19 +6,22 @@
         mc:Ignorable="d"
         Title="Spotify Lyrics Overlay"
         Width="800" Height="440"
-        MinWidth="400" MinHeight="180"
+        MinWidth="380" MinHeight="120"
         WindowStyle="None"
         AllowsTransparency="True"
         Background="Transparent"
         Topmost="True"
-        ShowInTaskbar="True"
+        ShowInTaskbar="False"
         ShowActivated="False"
+        AllowDrop="True"
         WindowStartupLocation="Manual"
         SnapsToDevicePixels="True"
         TextOptions.TextFormattingMode="Display"
         TextOptions.TextRenderingMode="ClearType"
         MouseLeftButtonDown="Window_MouseLeftButtonDown"
         PreviewMouseWheel="Window_PreviewMouseWheel"
+        Drop="Window_Drop"
+        DragOver="Window_DragOver"
         Loaded="Window_Loaded"
         Closing="Window_Closing">
 
@@ -61,13 +64,13 @@
             <Setter Property="BorderThickness" Value="1"/>
             <Setter Property="BorderBrush" Value="#25FFFFFF"/>
             <Setter Property="Cursor" Value="Hand"/>
-            <Setter Property="Width" Value="28"/>
-            <Setter Property="Height" Value="28"/>
+            <Setter Property="Width" Value="26"/>
+            <Setter Property="Height" Value="26"/>
             <Setter Property="Margin" Value="2,0"/>
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
-                        <Border x:Name="bd" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="14">
+                        <Border x:Name="bd" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="13">
                             <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
                         </Border>
                         <ControlTemplate.Triggers>
@@ -84,16 +87,15 @@
             </Setter>
         </Style>
 
-        <!-- Color Swatch Button Style -->
         <Style x:Key="ColorSwatchBtn" TargetType="Button">
-            <Setter Property="Width" Value="26"/>
-            <Setter Property="Height" Value="26"/>
+            <Setter Property="Width" Value="24"/>
+            <Setter Property="Height" Value="24"/>
             <Setter Property="Margin" Value="3,2"/>
             <Setter Property="Cursor" Value="Hand"/>
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
-                        <Border x:Name="swatchBorder" Background="{TemplateBinding Background}" CornerRadius="13" BorderBrush="#80FFFFFF" BorderThickness="2">
+                        <Border x:Name="swatchBorder" Background="{TemplateBinding Background}" CornerRadius="12" BorderBrush="#80FFFFFF" BorderThickness="2">
                             <ContentPresenter/>
                         </Border>
                         <ControlTemplate.Triggers>
@@ -106,10 +108,18 @@
                 </Setter.Value>
             </Setter>
         </Style>
+
+        <Style x:Key="DarkCheckBox" TargetType="CheckBox">
+            <Setter Property="Foreground" Value="#E8FFFFFF"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="FontFamily" Value="pack://application:,,,/Fonts/#Spotify Mix UI, Segoe UI, sans-serif"/>
+            <Setter Property="Margin" Value="0,4"/>
+            <Setter Property="Cursor" Value="Hand"/>
+        </Style>
     </Window.Resources>
 
     <Grid x:Name="MainContainer">
-        <!-- Main Card Border (Transparent by default for pure floating text, or toggleable to glass) -->
+        <!-- Main Card Border -->
         <Border x:Name="CardBorder"
                 CornerRadius="18"
                 Background="#01000000"
@@ -119,21 +129,20 @@
 
             <Grid Margin="12,10,12,10">
                 <Grid.RowDefinitions>
-                    <!-- Header (Song Info & Player bar) -->
                     <RowDefinition Height="Auto"/>
-                    <!-- Spotify-style Lyrics Area -->
                     <RowDefinition Height="*"/>
                 </Grid.RowDefinitions>
 
-                <!-- TOP HEADER: [ Thumbnail ] Title/Artist [ Progress Bar ] [ Toolbar ] -->
-                <Grid x:Name="HeaderGrid" Grid.Row="0" Margin="0,0,0,10" VerticalAlignment="Center">
+                <!-- TOP HEADER -->
+                <Grid x:Name="HeaderGrid" Grid.Row="0" Margin="0,0,0,8" VerticalAlignment="Center">
                     <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="Auto"/> <!-- Thumbnail -->
-                        <ColumnDefinition Width="*"/>    <!-- Title, Artist & Progress Bar -->
-                        <ColumnDefinition Width="Auto"/> <!-- Hover Toolbar / Unlock Button -->
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
 
-                    <!-- Album Art Thumbnail [  ] -->
+                    <!-- Album Art Thumbnail -->
                     <Border Grid.Column="0" Width="44" Height="44" CornerRadius="8" ClipToBounds="True" Background="#33000000" Margin="0,0,12,0" VerticalAlignment="Center">
                         <Border.Effect>
                             <DropShadowEffect Color="#000000" BlurRadius="6" ShadowDepth="2" Direction="315" Opacity="0.8"/>
@@ -145,23 +154,22 @@
                     </Border>
 
                     <!-- Song Info and Progress Bar -->
-                    <Grid Grid.Column="1" VerticalAlignment="Center" Margin="0,0,12,0">
+                    <Grid Grid.Column="1" VerticalAlignment="Center" Margin="0,0,10,0">
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
 
-                        <!-- Title Row: Official Spotify Mix UI Title Font -->
                         <StackPanel Grid.Row="0" Orientation="Horizontal">
                             <TextBlock x:Name="TxtSongTitle"
                                        Text="Đang chờ Spotify..."
                                        FontFamily="pack://application:,,,/Fonts/#Spotify Mix UI Title, Segoe UI Variable Display, Segoe UI, Arial, sans-serif"
                                        FontWeight="Bold"
-                                       FontSize="16"
+                                       FontSize="15"
                                        Foreground="#FFFFFF"
                                        TextTrimming="CharacterEllipsis"
-                                       MaxWidth="380">
+                                       MaxWidth="340">
                                 <TextBlock.Effect>
                                     <DropShadowEffect Color="#000000" BlurRadius="6" ShadowDepth="2" Direction="315" Opacity="0.95"/>
                                 </TextBlock.Effect>
@@ -169,7 +177,6 @@
                             <TextBlock x:Name="TxtPlayingDot" Text=" ●" FontSize="11" Foreground="#1DB954" VerticalAlignment="Center" Margin="5,0,0,0"/>
                         </StackPanel>
 
-                        <!-- Artist & Time Row: Official Spotify Mix UI Font -->
                         <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,2,0,4">
                             <TextBlock x:Name="TxtArtist"
                                        Text="Mở nhạc để hiện lyrics Spotify"
@@ -178,7 +185,7 @@
                                        FontWeight="Medium"
                                        Foreground="#D5FFFFFF"
                                        TextTrimming="CharacterEllipsis"
-                                       MaxWidth="280">
+                                       MaxWidth="220">
                                 <TextBlock.Effect>
                                     <DropShadowEffect Color="#000000" BlurRadius="4" ShadowDepth="1" Direction="315" Opacity="0.9"/>
                                 </TextBlock.Effect>
@@ -196,7 +203,6 @@
                             </TextBlock>
                         </StackPanel>
 
-                        <!-- Progress Bar (Clickable) -->
                         <Grid x:Name="ProgressBarContainer" Grid.Row="2" Height="4" Margin="0,2,0,0" Cursor="Hand" MouseLeftButtonDown="ProgressBarContainer_MouseLeftButtonDown">
                             <Border Background="#45000000" CornerRadius="2">
                                 <Border.Effect>
@@ -207,56 +213,58 @@
                         </Grid>
                     </Grid>
 
+                    <!-- OPTIONAL AUDIO VISUALIZER (OFF by default) -->
+                    <StackPanel x:Name="VisualizerPanel"
+                                Grid.Column="2"
+                                Orientation="Horizontal"
+                                Height="24"
+                                VerticalAlignment="Center"
+                                Margin="0,0,10,0"
+                                Visibility="Collapsed"/>
+
                     <!-- HOVER TOOLBAR (Visible when Unlocked) -->
-                    <StackPanel x:Name="ToolbarPanel" Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
-                        <!-- Play/Pause -->
+                    <StackPanel x:Name="ToolbarPanel" Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center">
                         <Button Style="{StaticResource RoundControlBtn}" Click="BtnPlayPause_Click" ToolTip="Phát / Tạm dừng">
                             <TextBlock x:Name="TxtPlayPauseIcon" Text="⏸" FontSize="11"/>
                         </Button>
-                        <!-- Next Song -->
                         <Button Style="{StaticResource RoundControlBtn}" Click="BtnNext_Click" ToolTip="Bài tiếp theo">
                             <TextBlock Text="⏭" FontSize="10"/>
                         </Button>
-                        <!-- Customize / Settings Button -->
-                        <Button Style="{StaticResource IconButton}" Click="BtnCustomize_Click" ToolTip="Tùy chỉnh cỡ chữ &amp; màu sắc">
+                        <Button Style="{StaticResource IconButton}" Click="BtnMode_Click" ToolTip="Chuyển chế độ Spotify / Mini Mode">
+                            <TextBlock x:Name="TxtModeBtn" Text="Spotify" FontSize="11"/>
+                        </Button>
+                        <Button Style="{StaticResource IconButton}" Click="BtnCustomize_Click" ToolTip="Tùy chỉnh màu, cỡ chữ, dịch, sóng nhạc, presets">
                             <StackPanel Orientation="Horizontal">
                                 <TextBlock Text="🎨 " FontSize="10"/>
                                 <TextBlock Text="Tùy chỉnh" FontSize="11"/>
                             </StackPanel>
                         </Button>
-                        <!-- Font Size Down -->
                         <Button Style="{StaticResource RoundControlBtn}" Click="BtnFontDown_Click" ToolTip="Giảm cỡ chữ">
                             <TextBlock Text="A-" FontSize="10" FontWeight="Bold"/>
                         </Button>
-                        <!-- Font Size Up -->
                         <Button Style="{StaticResource RoundControlBtn}" Click="BtnFontUp_Click" ToolTip="Tăng cỡ chữ">
                             <TextBlock Text="A+" FontSize="10" FontWeight="Bold"/>
                         </Button>
-                        <!-- Sync Offset Minus -->
                         <Button Style="{StaticResource IconButton}" Click="BtnSyncMinus_Click" ToolTip="Chỉnh lời sớm hơn 0.5s">
                             <TextBlock Text="-0.5s" FontSize="10"/>
                         </Button>
-                        <!-- Sync Offset Plus -->
                         <Button Style="{StaticResource IconButton}" Click="BtnSyncPlus_Click" ToolTip="Chỉnh lời trễ hơn 0.5s">
                             <TextBlock Text="+0.5s" FontSize="10"/>
                         </Button>
-                        <!-- Glass / Transparent toggle -->
                         <Button Style="{StaticResource RoundControlBtn}" Click="BtnGlass_Click" ToolTip="Bật/Tắt nền kính mờ">
                             <TextBlock x:Name="TxtGlassIcon" Text="✨" FontSize="11"/>
                         </Button>
-                        <!-- Lock (Click-Through) -->
-                        <Button x:Name="BtnLock" Style="{StaticResource RoundControlBtn}" Click="BtnLock_Click" ToolTip="Khóa ghim (Xuyên chuột) - Ẩn nút">
+                        <Button x:Name="BtnLock" Style="{StaticResource RoundControlBtn}" Click="BtnLock_Click" ToolTip="Khóa ghim (Xuyên chuột) - Ctrl+Shift+L">
                             <TextBlock x:Name="TxtLockIcon" Text="🔒" FontSize="11"/>
                         </Button>
-                        <!-- Close Button -->
-                        <Button Style="{StaticResource RoundControlBtn}" Click="BtnClose_Click" ToolTip="Đóng ứng dụng">
-                            <TextBlock Text="✕" FontSize="11"/>
+                        <Button Style="{StaticResource RoundControlBtn}" Click="BtnMinimizeTray_Click" ToolTip="Thu gọn xuống System Tray">
+                            <TextBlock Text="—" FontSize="11" FontWeight="Bold"/>
                         </Button>
                     </StackPanel>
 
-                    <!-- FLOATING UNLOCK BUTTON (Appears when hovering while locked!) -->
+                    <!-- FLOATING UNLOCK BUTTON (Appears when hovering while locked) -->
                     <Border x:Name="FloatingUnlockBorder"
-                            Grid.Column="2"
+                            Grid.Column="3"
                             VerticalAlignment="Center"
                             HorizontalAlignment="Right"
                             Background="#D015151B"
@@ -277,7 +285,7 @@
                     </Border>
                 </Grid>
 
-                <!-- SPOTIFY-STYLE LYRICS SCROLLING AREA -->
+                <!-- LYRICS AREA -->
                 <Grid Grid.Row="1" x:Name="LyricsAreaGrid">
                     <!-- Status / Waiting Message -->
                     <StackPanel x:Name="StatusPanel" VerticalAlignment="Center" HorizontalAlignment="Left" Margin="10,0,0,0" Visibility="Visible">
@@ -292,7 +300,7 @@
                                 <DropShadowEffect Color="#000000" BlurRadius="6" ShadowDepth="2" Direction="315" Opacity="0.9"/>
                             </TextBlock.Effect>
                         </TextBlock>
-                        <TextBlock Text="Phát nhạc trên Spotify • Nhấn 🔒 hoặc Ctrl+Shift+L để khóa xuyên chuột"
+                        <TextBlock Text="Phát nhạc trên Spotify • Kéo thả file .lrc nếu cần • Ctrl+Shift+L để khóa"
                                    FontSize="12"
                                    FontFamily="pack://application:,,,/Fonts/#Spotify Mix UI, Segoe UI, sans-serif"
                                    Foreground="#60FFFFFF"
@@ -303,7 +311,7 @@
                         </TextBlock>
                     </StackPanel>
 
-                    <!-- SPOTIFY LYRICS SCROLLVIEWER -->
+                    <!-- SPOTIFY FULL SCROLL VIEW -->
                     <ScrollViewer x:Name="LyricsScrollViewer"
                                   VerticalScrollBarVisibility="Hidden"
                                   HorizontalScrollBarVisibility="Disabled"
@@ -312,96 +320,190 @@
                         <StackPanel x:Name="LyricsListPanel"
                                     Orientation="Vertical"
                                     HorizontalAlignment="Stretch"
-                                    Margin="4,20,4,160"/>
+                                    Margin="4,16,4,160"/>
                     </ScrollViewer>
+
+                    <!-- MINI / DYNAMIC ISLAND MODE (1-2 Lines) -->
+                    <StackPanel x:Name="MiniModePanel"
+                                VerticalAlignment="Center"
+                                HorizontalAlignment="Stretch"
+                                Margin="4,0,4,4"
+                                Visibility="Collapsed">
+                        <TextBlock x:Name="TxtMiniActive"
+                                   Text="♪ ♫ ♪"
+                                   FontSize="26"
+                                   FontWeight="Bold"
+                                   FontFamily="pack://application:,,,/Fonts/#Spotify Mix UI, Segoe UI, sans-serif"
+                                   Foreground="#FFFFFF"
+                                   TextAlignment="Left"
+                                   TextWrapping="Wrap">
+                            <TextBlock.Effect>
+                                <DropShadowEffect Color="#000000" BlurRadius="6" ShadowDepth="2" Direction="315" Opacity="0.95"/>
+                            </TextBlock.Effect>
+                        </TextBlock>
+                        <TextBlock x:Name="TxtMiniTranslation"
+                                   Text=""
+                                   FontSize="16"
+                                   FontStyle="Italic"
+                                   FontFamily="pack://application:,,,/Fonts/#Spotify Mix UI, Segoe UI, sans-serif"
+                                   Foreground="#C5FFFFFF"
+                                   TextAlignment="Left"
+                                   TextWrapping="Wrap"
+                                   Margin="0,2,0,0"
+                                   Visibility="Collapsed">
+                            <TextBlock.Effect>
+                                <DropShadowEffect Color="#000000" BlurRadius="5" ShadowDepth="1" Direction="315" Opacity="0.9"/>
+                            </TextBlock.Effect>
+                        </TextBlock>
+                        <TextBlock x:Name="TxtMiniNext"
+                                   Text=""
+                                   FontSize="18"
+                                   FontWeight="SemiBold"
+                                   FontFamily="pack://application:,,,/Fonts/#Spotify Mix UI, Segoe UI, sans-serif"
+                                   Foreground="#FFFFFF"
+                                   Opacity="0.45"
+                                   TextAlignment="Left"
+                                   TextTrimming="CharacterEllipsis"
+                                   Margin="0,6,0,0">
+                            <TextBlock.Effect>
+                                <DropShadowEffect Color="#000000" BlurRadius="5" ShadowDepth="1" Direction="315" Opacity="0.9"/>
+                            </TextBlock.Effect>
+                        </TextBlock>
+                    </StackPanel>
                 </Grid>
 
                 <!-- SETTINGS & CUSTOMIZATION FLYOUT PANEL -->
                 <Border x:Name="SettingsFlyout"
                         Grid.Row="0" Grid.RowSpan="2"
                         HorizontalAlignment="Right" VerticalAlignment="Top"
-                        Width="330" Margin="0, 48, 4, 0"
-                        Background="#EE141419"
-                        BorderBrush="#40FFFFFF"
+                        Width="350" MaxHeight="365" Margin="0,46,4,0"
+                        Background="#F2141419"
+                        BorderBrush="#45FFFFFF"
                         BorderThickness="1"
                         CornerRadius="16"
-                        Padding="16"
+                        Padding="14"
                         Visibility="Collapsed">
                     <Border.Effect>
-                        <DropShadowEffect Color="#000000" BlurRadius="24" ShadowDepth="4" Opacity="0.75"/>
+                        <DropShadowEffect Color="#000000" BlurRadius="24" ShadowDepth="4" Opacity="0.8"/>
                     </Border.Effect>
 
-                    <StackPanel>
-                        <!-- Header -->
-                        <Grid Margin="0,0,0,12">
-                            <TextBlock Text="⚙️ Tùy chỉnh giao diện" FontWeight="Bold" FontSize="14" Foreground="#FFFFFF" FontFamily="pack://application:,,,/Fonts/#Spotify Mix UI Title, Segoe UI, sans-serif" VerticalAlignment="Center"/>
-                            <Button Style="{StaticResource RoundControlBtn}" Width="24" Height="24" HorizontalAlignment="Right" Click="BtnCloseSettings_Click">
-                                <TextBlock Text="✕" FontSize="10"/>
-                            </Button>
-                        </Grid>
+                    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                        <StackPanel Margin="0,0,4,0">
+                            <!-- Header -->
+                            <Grid Margin="0,0,0,10">
+                                <TextBlock Text="⚙️ Tùy chỉnh &amp; Tính năng" FontWeight="Bold" FontSize="14" Foreground="#FFFFFF" FontFamily="pack://application:,,,/Fonts/#Spotify Mix UI Title, Segoe UI, sans-serif" VerticalAlignment="Center"/>
+                                <Button Style="{StaticResource RoundControlBtn}" Width="24" Height="24" HorizontalAlignment="Right" Click="BtnCloseSettings_Click">
+                                    <TextBlock Text="✕" FontSize="10"/>
+                                </Button>
+                            </Grid>
 
-                        <!-- SECTION 1: CỠ CHỮ -->
-                        <TextBlock Text="CỠ CHỮ (FONT SIZE)" FontSize="10" FontWeight="Bold" Foreground="#88FFFFFF" Margin="0,0,0,6"/>
-                        <Grid Margin="0,0,0,8">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*"/>
-                                <ColumnDefinition Width="Auto"/>
-                            </Grid.ColumnDefinitions>
-                            <Slider x:Name="SliderFontSize" Minimum="18" Maximum="48" SmallChange="1" LargeChange="2" Value="28" ValueChanged="SliderFontSize_ValueChanged" VerticalAlignment="Center"/>
-                            <TextBlock x:Name="TxtFontSizePreview" Grid.Column="1" Text="28 pt" FontSize="12" FontWeight="Bold" Foreground="#FFFFFF" Margin="10,0,0,0" VerticalAlignment="Center" Width="40" TextAlignment="Right"/>
-                        </Grid>
+                            <!-- SECTION: PRESETS -->
+                            <TextBlock Text="BỘ CẤU HÌNH NHANH (PRESETS)" FontSize="10" FontWeight="Bold" Foreground="#88FFFFFF" Margin="0,0,0,6"/>
+                            <WrapPanel Margin="0,0,0,10">
+                                <Button Style="{StaticResource IconButton}" Content="🌿 Chill" Click="BtnPresetProfile_Click" Tag="Chill Desktop" Margin="0,2,4,2"/>
+                                <Button Style="{StaticResource IconButton}" Content="🎮 Gaming" Click="BtnPresetProfile_Click" Tag="Gaming / Valorant" Margin="0,2,4,2"/>
+                                <Button Style="{StaticResource IconButton}" Content="🏝️ Mini" Click="BtnPresetProfile_Click" Tag="Mini Island" Margin="0,2,4,2"/>
+                                <Button Style="{StaticResource IconButton}" Content="🎤 Karaoke" Click="BtnPresetProfile_Click" Tag="Karaoke" Margin="0,2,4,2"/>
+                            </WrapPanel>
 
-                        <!-- Presets for font size -->
-                        <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
-                            <Button Style="{StaticResource IconButton}" Content="Nhỏ (22)" Click="BtnPresetFont_Click" Tag="22"/>
-                            <Button Style="{StaticResource IconButton}" Content="Vừa (28)" Click="BtnPresetFont_Click" Tag="28"/>
-                            <Button Style="{StaticResource IconButton}" Content="Lớn (34)" Click="BtnPresetFont_Click" Tag="34"/>
-                            <Button Style="{StaticResource IconButton}" Content="To (42)" Click="BtnPresetFont_Click" Tag="42"/>
+                            <Separator Background="#25FFFFFF" Margin="0,0,0,10"/>
+
+                            <!-- SECTION: SMART TOGGLES -->
+                            <TextBlock Text="TÍNH NĂNG THÔNG MINH" FontSize="10" FontWeight="Bold" Foreground="#88FFFFFF" Margin="0,0,0,4"/>
+                            <CheckBox x:Name="ChkAdaptiveColor" Style="{StaticResource DarkCheckBox}" Content="🎨 Đổi màu tự động theo ảnh bìa Album" Checked="ChkSetting_Changed" Unchecked="ChkSetting_Changed"/>
+                            <CheckBox x:Name="ChkShowTranslation" Style="{StaticResource DarkCheckBox}" Content="🌐 Dịch lời bài hát song ngữ" Checked="ChkTranslation_Changed" Unchecked="ChkTranslation_Changed"/>
+                            <StackPanel Orientation="Horizontal" Margin="20,2,0,4">
+                                <TextBlock Text="Ngôn ngữ dịch:" FontSize="11" Foreground="#AAAAAA" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                <ComboBox x:Name="CmbTargetLang" Width="115" SelectedIndex="0" SelectionChanged="CmbTargetLang_SelectionChanged" FontSize="11">
+                                    <ComboBoxItem Content="Tiếng Việt (vi)" Tag="vi"/>
+                                    <ComboBoxItem Content="English (en)" Tag="en"/>
+                                </ComboBox>
+                            </StackPanel>
+                            <CheckBox x:Name="ChkMiniMode" Style="{StaticResource DarkCheckBox}" Content="📱 Chế độ thu gọn (Mini 1-2 dòng)" Checked="ChkMiniMode_Changed" Unchecked="ChkMiniMode_Changed"/>
+                            <CheckBox x:Name="ChkVisualizer" Style="{StaticResource DarkCheckBox}" Content="📊 Thanh sóng nhạc (Audio Visualizer)" Checked="ChkVisualizer_Changed" Unchecked="ChkVisualizer_Changed"/>
+                            <CheckBox x:Name="ChkAutoHide" Style="{StaticResource DarkCheckBox}" Content="👁️ Tự động ẩn sau 8s khi tạm dừng nhạc" Checked="ChkSetting_Changed" Unchecked="ChkSetting_Changed"/>
+                            <CheckBox x:Name="ChkStartup" Style="{StaticResource DarkCheckBox}" Content="🚀 Tự khởi động cùng Windows" Checked="ChkStartup_Changed" Unchecked="ChkStartup_Changed"/>
+
+                            <Separator Background="#25FFFFFF" Margin="0,8,0,10"/>
+
+                            <!-- SECTION: CỠ CHỮ -->
+                            <TextBlock Text="CỠ CHỮ (FONT SIZE)" FontSize="10" FontWeight="Bold" Foreground="#88FFFFFF" Margin="0,0,0,4"/>
+                            <Grid Margin="0,0,0,6">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <Slider x:Name="SliderFontSize" Minimum="18" Maximum="48" SmallChange="1" LargeChange="2" Value="28" ValueChanged="SliderFontSize_ValueChanged" VerticalAlignment="Center"/>
+                                <TextBlock x:Name="TxtFontSizePreview" Grid.Column="1" Text="28 pt" FontSize="12" FontWeight="Bold" Foreground="#FFFFFF" Margin="10,0,0,0" VerticalAlignment="Center" Width="40" TextAlignment="Right"/>
+                            </Grid>
+                            <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                                <Button Style="{StaticResource IconButton}" Content="Nhỏ (22)" Click="BtnPresetFont_Click" Tag="22"/>
+                                <Button Style="{StaticResource IconButton}" Content="Vừa (28)" Click="BtnPresetFont_Click" Tag="28"/>
+                                <Button Style="{StaticResource IconButton}" Content="Lớn (34)" Click="BtnPresetFont_Click" Tag="34"/>
+                                <Button Style="{StaticResource IconButton}" Content="To (42)" Click="BtnPresetFont_Click" Tag="42"/>
+                            </StackPanel>
+
+                            <!-- SECTION: MÀU CHỮ THỦ CÔNG -->
+                            <TextBlock Text="MÀU CÂU ĐANG HÁT (Tắt Đổi màu tự động để dùng)" FontSize="10" FontWeight="Bold" Foreground="#88FFFFFF" Margin="0,0,0,4"/>
+                            <WrapPanel Margin="0,0,0,6">
+                                <Button Style="{StaticResource ColorSwatchBtn}" Background="#FFFFFF" Click="BtnSwatchActive_Click" Tag="#FFFFFF" ToolTip="Trắng Spotify"/>
+                                <Button Style="{StaticResource ColorSwatchBtn}" Background="#1DB954" Click="BtnSwatchActive_Click" Tag="#1DB954" ToolTip="Xanh Spotify"/>
+                                <Button Style="{StaticResource ColorSwatchBtn}" Background="#00F0FF" Click="BtnSwatchActive_Click" Tag="#00F0FF" ToolTip="Cyan Neon"/>
+                                <Button Style="{StaticResource ColorSwatchBtn}" Background="#C084FC" Click="BtnSwatchActive_Click" Tag="#C084FC" ToolTip="Tím Lavender"/>
+                                <Button Style="{StaticResource ColorSwatchBtn}" Background="#FF2A85" Click="BtnSwatchActive_Click" Tag="#FF2A85" ToolTip="Hồng Neon"/>
+                                <Button Style="{StaticResource ColorSwatchBtn}" Background="#FFD166" Click="BtnSwatchActive_Click" Tag="#FFD166" ToolTip="Vàng Sunset"/>
+                                <Button Style="{StaticResource ColorSwatchBtn}" Background="#FF7A00" Click="BtnSwatchActive_Click" Tag="#FF7A00" ToolTip="Cam Vibrant"/>
+                                <Button Style="{StaticResource ColorSwatchBtn}" Background="#FF4B4B" Click="BtnSwatchActive_Click" Tag="#FF4B4B" ToolTip="Đỏ San Hô"/>
+                            </WrapPanel>
+                            <Grid Margin="0,0,0,10">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="Mã màu:" FontSize="11" Foreground="#AAAAAA" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                <TextBox x:Name="TxtHexColor" Grid.Column="1" Text="#FFFFFF" Background="#30000000" Foreground="#FFFFFF" BorderBrush="#40FFFFFF" BorderThickness="1" Padding="6,3" VerticalAlignment="Center" FontFamily="Consolas"/>
+                                <Button Grid.Column="2" Style="{StaticResource IconButton}" Content="Áp dụng" Click="BtnApplyHex_Click" Margin="6,0,0,0"/>
+                            </Grid>
+
+                            <!-- SECTION: ĐỘ MỜ -->
+                            <TextBlock Text="ĐỘ MỜ CÁC CÂU CÒN LẠI" FontSize="10" FontWeight="Bold" Foreground="#88FFFFFF" Margin="0,0,0,4"/>
+                            <Grid Margin="0,0,0,10">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <Slider x:Name="SliderOpacity" Minimum="0.15" Maximum="0.80" SmallChange="0.05" LargeChange="0.10" Value="0.40" ValueChanged="SliderOpacity_ValueChanged" VerticalAlignment="Center"/>
+                                <TextBlock x:Name="TxtOpacityPreview" Grid.Column="1" Text="40%" FontSize="12" FontWeight="Bold" Foreground="#FFFFFF" Margin="10,0,0,0" VerticalAlignment="Center" Width="40" TextAlignment="Right"/>
+                            </Grid>
+
+                            <Separator Background="#25FFFFFF" Margin="0,0,0,10"/>
+
+                            <!-- SECTION: LYRICS SOURCE & OFFLINE -->
+                            <TextBlock Text="NGUỒN LYRICS &amp; OFFLINE (.LRC)" FontSize="10" FontWeight="Bold" Foreground="#88FFFFFF" Margin="0,0,0,4"/>
+                            <CheckBox x:Name="ChkOfflineCache" Style="{StaticResource DarkCheckBox}" Content="💾 Tự động lưu cache .lrc để dùng offline" Checked="ChkSetting_Changed" Unchecked="ChkSetting_Changed"/>
+                            <Button Style="{StaticResource IconButton}" Content="📂 Nạp file .lrc thủ công cho bài này" HorizontalAlignment="Stretch" Padding="0,5" Margin="0,4,0,8" Click="BtnImportLrc_Click"/>
+
+                            <TextBlock Text="Spotify sp_dc Cookie (tùy chọn, lấy trực tiếp từ Spotify):" FontSize="10" Foreground="#99FFFFFF" Margin="0,0,0,4"/>
+                            <Grid Margin="0,0,0,12">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBox x:Name="TxtSpDcCookie" Text="" Background="#30000000" Foreground="#FFFFFF" BorderBrush="#40FFFFFF" BorderThickness="1" Padding="6,3" VerticalAlignment="Center" FontFamily="Consolas" FontSize="11"/>
+                                <Button Grid.Column="1" Style="{StaticResource IconButton}" Content="Lưu" Click="BtnSaveSpDc_Click" Margin="6,0,0,0"/>
+                            </Grid>
+
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <Button Grid.Column="0" Style="{StaticResource IconButton}" Content="Đóng bảng" Padding="0,6" Margin="0,0,4,0" Click="BtnCloseSettings_Click"/>
+                                <Button Grid.Column="1" Style="{StaticResource IconButton}" Background="#40E53935" Content="Thoát App" Padding="0,6" Margin="4,0,0,0" Click="BtnExitApp_Click"/>
+                            </Grid>
                         </StackPanel>
-
-                        <Separator Background="#25FFFFFF" Margin="0,0,0,12"/>
-
-                        <!-- SECTION 2: MÀU DÒNG ĐANG HÁT (ACTIVE) -->
-                        <TextBlock Text="MÀU CÂU ĐANG HÁT (ACTIVE)" FontSize="10" FontWeight="Bold" Foreground="#88FFFFFF" Margin="0,0,0,6"/>
-                        <WrapPanel Margin="0,0,0,8">
-                            <Button Style="{StaticResource ColorSwatchBtn}" Background="#FFFFFF" Click="BtnSwatchActive_Click" Tag="#FFFFFF" ToolTip="Trắng Spotify"/>
-                            <Button Style="{StaticResource ColorSwatchBtn}" Background="#1DB954" Click="BtnSwatchActive_Click" Tag="#1DB954" ToolTip="Xanh Spotify"/>
-                            <Button Style="{StaticResource ColorSwatchBtn}" Background="#00F0FF" Click="BtnSwatchActive_Click" Tag="#00F0FF" ToolTip="Xanh Cyan Neon"/>
-                            <Button Style="{StaticResource ColorSwatchBtn}" Background="#C084FC" Click="BtnSwatchActive_Click" Tag="#C084FC" ToolTip="Tím Lavender"/>
-                            <Button Style="{StaticResource ColorSwatchBtn}" Background="#FF2A85" Click="BtnSwatchActive_Click" Tag="#FF2A85" ToolTip="Hồng Neon"/>
-                            <Button Style="{StaticResource ColorSwatchBtn}" Background="#FFD166" Click="BtnSwatchActive_Click" Tag="#FFD166" ToolTip="Vàng Sunset"/>
-                            <Button Style="{StaticResource ColorSwatchBtn}" Background="#FF7A00" Click="BtnSwatchActive_Click" Tag="#FF7A00" ToolTip="Cam Vibrant"/>
-                            <Button Style="{StaticResource ColorSwatchBtn}" Background="#FF4B4B" Click="BtnSwatchActive_Click" Tag="#FF4B4B" ToolTip="Đỏ San Hô"/>
-                        </WrapPanel>
-
-                        <!-- Custom Hex Color for Active -->
-                        <Grid Margin="0,0,0,12">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="Auto"/>
-                                <ColumnDefinition Width="*"/>
-                                <ColumnDefinition Width="Auto"/>
-                            </Grid.ColumnDefinitions>
-                            <TextBlock Text="Mã màu:" FontSize="11" Foreground="#AAAAAA" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                            <TextBox x:Name="TxtHexColor" Grid.Column="1" Text="#FFFFFF" Background="#30000000" Foreground="#FFFFFF" BorderBrush="#40FFFFFF" BorderThickness="1" Padding="6,3" VerticalAlignment="Center" FontFamily="Consolas"/>
-                            <Button Grid.Column="2" Style="{StaticResource IconButton}" Content="Áp dụng" Click="BtnApplyHex_Click" Margin="6,0,0,0"/>
-                        </Grid>
-
-                        <Separator Background="#25FFFFFF" Margin="0,0,0,12"/>
-
-                        <!-- SECTION 3: ĐỘ MỜ CÁC CÂU CÒN LẠI (OPACITY) -->
-                        <TextBlock Text="ĐỘ MỜ CÁC CÂU CÒN LẠI" FontSize="10" FontWeight="Bold" Foreground="#88FFFFFF" Margin="0,0,0,6"/>
-                        <Grid Margin="0,0,0,12">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*"/>
-                                <ColumnDefinition Width="Auto"/>
-                            </Grid.ColumnDefinitions>
-                            <Slider x:Name="SliderOpacity" Minimum="0.15" Maximum="0.80" SmallChange="0.05" LargeChange="0.10" Value="0.40" ValueChanged="SliderOpacity_ValueChanged" VerticalAlignment="Center"/>
-                            <TextBlock x:Name="TxtOpacityPreview" Grid.Column="1" Text="40%" FontSize="12" FontWeight="Bold" Foreground="#FFFFFF" Margin="10,0,0,0" VerticalAlignment="Center" Width="40" TextAlignment="Right"/>
-                        </Grid>
-
-                        <!-- Bottom Close Button -->
-                        <Button Style="{StaticResource IconButton}" Content="Đóng bảng tùy chỉnh" HorizontalAlignment="Stretch" Padding="0,6" Click="BtnCloseSettings_Click"/>
-                    </StackPanel>
+                    </ScrollViewer>
                 </Border>
 
                 <!-- TOAST NOTIFICATION PILL -->

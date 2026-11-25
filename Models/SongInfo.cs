@@ -1,4 +1,5 @@
 using System;
+using System.Windows.Media;
 using System.Windows.Media.Imaging;
 
 namespace SpotifyLyricsOverlay.Models
@@ -12,6 +13,7 @@ namespace SpotifyLyricsOverlay.Models
         public TimeSpan Position { get; set; } = TimeSpan.Zero;
         public bool IsPlaying { get; set; }
         public BitmapSource? Thumbnail { get; set; }
+        public Color? DominantColor { get; set; }
 
         public string CacheKey => $"{Artist} - {Title}".Trim();
 

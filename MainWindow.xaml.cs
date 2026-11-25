@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Threading;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -9,6 +11,7 @@ using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Effects;
 using System.Windows.Threading;
+using Microsoft.Win32;
 using SpotifyLyricsOverlay.Helpers;
 using SpotifyLyricsOverlay.Models;
 using SpotifyLyricsOverlay.Services;
@@ -19,6 +22,9 @@ namespace SpotifyLyricsOverlay
     {
         private readonly SmtcService _smtcService = new();
         private readonly LyricsService _lyricsService = new();
+        private readonly TranslationService _translationService = new();
+        private readonly AudioVisualizerService _visualizerService = new();
+        private TrayService? _trayService;
         private AppSettings _settings = new();
 
         private DispatcherTimer? _syncTimer;
@@ -27,6 +33,7 @@ namespace SpotifyLyricsOverlay
         private CancellationTokenSource? _lyricsCts;
 
         private List<LyricLine> _currentLyrics = new();
+        private readonly List<Border> _visualizerBars = new();
         private int _lastActiveIndex = -2;
         private const int HOTKEY_ID = 9102;
 
@@ -34,7 +41,11 @@ namespace SpotifyLyricsOverlay
         private double _currentScrollOffset = 0;
         private bool _userIsScrolling = false;
         private bool _isTemporarilyClickable = false;
+        private bool _isInitializing = true;
+        private bool _isExiting = false;
         private int _topmostTick = 0;
+        private DateTimeOffset? _pausedSince = null;
+        private bool _hiddenByAutoHide = false;
 
         [DllImport("user32.dll")]
         private static extern IntPtr SendMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
@@ -45,12 +56,37 @@ namespace SpotifyLyricsOverlay
         public MainWindow()
         {
             InitializeComponent();
+            InitializeVisualizerBars();
+        }
+
+        private void InitializeVisualizerBars()
+        {
+            VisualizerPanel.Children.Clear();
+            _visualizerBars.Clear();
+            for (int i = 0; i < AudioVisualizerService.BarCount; i++)
+            {
+                var bar = new Border
+                {
+                    Width = 3,
+                    Height = 3,
+                    CornerRadius = new CornerRadius(1.5),
+                    Margin = new Thickness(1.5, 0, 1.5, 0),
+                    VerticalAlignment = VerticalAlignment.Bottom,
+                    Background = Brushes.White
+                };
+                _visualizerBars.Add(bar);
+                VisualizerPanel.Children.Add(bar);
+            }
         }
 
         private async void Window_Loaded(object sender, RoutedEventArgs e)
         {
+            _isInitializing = true;
             _settings = SettingsService.Load();
+            _settings.StartWithWindows = StartupHelper.IsStartupEnabled();
+
             ApplySettings();
+            InitializeTray();
 
             // Set up Hwnd Hook and Register Hotkey (Ctrl + Shift + L)
             var helper = new WindowInteropHelper(this);
@@ -64,7 +100,6 @@ namespace SpotifyLyricsOverlay
                 WindowHelper.VK_L
             );
 
-            // High-precision sync & smooth-scroll timer (approx 30fps)
             _syncTimer = new DispatcherTimer(DispatcherPriority.Render)
             {
                 Interval = TimeSpan.FromMilliseconds(33)
@@ -72,7 +107,6 @@ namespace SpotifyLyricsOverlay
             _syncTimer.Tick += SyncTimer_Tick;
             _syncTimer.Start();
 
-            // Toast hide timer
             _toastTimer = new DispatcherTimer
             {
                 Interval = TimeSpan.FromSeconds(2.5)
@@ -83,7 +117,6 @@ namespace SpotifyLyricsOverlay
                 ToastBorder.Visibility = Visibility.Collapsed;
             };
 
-            // User scroll resume timer (resume auto-scroll after 3s)
             _scrollResumeTimer = new DispatcherTimer
             {
                 Interval = TimeSpan.FromSeconds(3)
@@ -94,12 +127,36 @@ namespace SpotifyLyricsOverlay
                 _userIsScrolling = false;
             };
 
-            // Wire up SMTC events
             _smtcService.SongChanged += OnSongChanged;
             _smtcService.PlaybackStateChanged += OnPlaybackStateChanged;
+            _visualizerService.SpectrumUpdated += OnSpectrumUpdated;
+
+            _isInitializing = false;
 
             WindowHelper.ForceTopMost(this);
             await _smtcService.InitializeAsync();
+        }
+
+        private void InitializeTray()
+        {
+            _trayService = new TrayService(_settings.StartWithWindows, _settings.IsLocked);
+            _trayService.ToggleVisibilityRequested += () => Dispatcher.Invoke(ToggleOverlayVisibility);
+            _trayService.ToggleLockRequested += () => Dispatcher.Invoke(ToggleLock);
+            _trayService.OpenSettingsRequested += () => Dispatcher.Invoke(() =>
+            {
+                ShowOverlayFromTray();
+                if (_settings.IsLocked) ApplyLock(false);
+                SettingsFlyout.Visibility = Visibility.Visible;
+            });
+            _trayService.PresetSelected += preset => Dispatcher.Invoke(() => ApplyPreset(preset));
+            _trayService.StartupToggled += enabled => Dispatcher.Invoke(() =>
+            {
+                _settings.StartWithWindows = enabled;
+                StartupHelper.SetStartup(enabled);
+                ChkStartup.IsChecked = enabled;
+                SettingsService.Save(_settings);
+            });
+            _trayService.ExitRequested += () => Dispatcher.Invoke(ExitApplication);
         }
 
         private IntPtr HwndHook(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
@@ -114,7 +171,6 @@ namespace SpotifyLyricsOverlay
 
         private void ApplySettings()
         {
-            // Position and Size
             if (_settings.WindowWidth >= MinWidth) Width = _settings.WindowWidth;
             if (_settings.WindowHeight >= MinHeight) Height = _settings.WindowHeight;
 
@@ -125,31 +181,93 @@ namespace SpotifyLyricsOverlay
             if (_settings.WindowTop >= 0 && _settings.WindowTop < virtualHeight - 100)
                 Top = _settings.WindowTop;
 
-            // Font size slider & label
             SliderFontSize.Value = _settings.FontSize;
             TxtFontSizePreview.Text = $"{(int)_settings.FontSize} pt";
 
-            // Colors
             TxtHexColor.Text = _settings.ActiveColor;
             SliderOpacity.Value = _settings.InactiveOpacity;
             TxtOpacityPreview.Text = $"{(int)(_settings.InactiveOpacity * 100)}%";
 
+            ChkAdaptiveColor.IsChecked = _settings.AdaptiveColor;
+            ChkShowTranslation.IsChecked = _settings.ShowTranslation;
+            CmbTargetLang.SelectedIndex = string.Equals(_settings.TranslationLanguage, "en", StringComparison.OrdinalIgnoreCase) ? 1 : 0;
+            ChkMiniMode.IsChecked = _settings.DisplayMode == "MiniMode";
+            ChkVisualizer.IsChecked = _settings.ShowVisualizer;
+            ChkAutoHide.IsChecked = _settings.AutoHideOnPause;
+            ChkStartup.IsChecked = _settings.StartWithWindows;
+            ChkOfflineCache.IsChecked = _settings.SaveOfflineCache;
+            TxtSpDcCookie.Text = _settings.SpotifySpDcCookie;
+
+            ApplyDisplayMode(_settings.DisplayMode);
+            ApplyVisualizerState(_settings.ShowVisualizer);
             ApplyColorsAndSizes();
             ApplyGlassStyle(_settings.GlassBackground);
             ApplyLock(_settings.IsLocked, showToast: false);
         }
 
+        private Color GetEffectiveActiveColor()
+        {
+            if (_settings.AdaptiveColor && _smtcService.CurrentSong.DominantColor.HasValue)
+            {
+                return _smtcService.CurrentSong.DominantColor.Value;
+            }
+            return ParseColor(_settings.ActiveColor, Colors.White);
+        }
+
         private void ApplyColorsAndSizes()
         {
-            var activeColor = ParseColor(_settings.ActiveColor, Colors.White);
+            var activeColor = GetEffectiveActiveColor();
             var activeBrush = new SolidColorBrush(activeColor);
 
             ProgressBarFill.Background = activeBrush;
             TxtPlayingDot.Foreground = activeBrush;
 
-            if (_lastActiveIndex >= 0)
+            foreach (var bar in _visualizerBars)
+            {
+                bar.Background = activeBrush;
+            }
+
+            if (_settings.DisplayMode == "MiniMode")
+            {
+                UpdateMiniModeDisplay(_lastActiveIndex);
+            }
+            else
             {
                 UpdateLyricLineStyles(_lastActiveIndex);
+            }
+        }
+
+        private void ApplyDisplayMode(string mode)
+        {
+            _settings.DisplayMode = mode == "MiniMode" ? "MiniMode" : "SpotifyScroll";
+            bool isMini = _settings.DisplayMode == "MiniMode";
+
+            LyricsScrollViewer.Visibility = isMini ? Visibility.Collapsed : Visibility.Visible;
+            MiniModePanel.Visibility = isMini ? Visibility.Visible : Visibility.Collapsed;
+            TxtModeBtn.Text = isMini ? "Mini" : "Spotify";
+
+            if (_currentLyrics.Count == 0)
+            {
+                MiniModePanel.Visibility = Visibility.Collapsed;
+            }
+            else if (isMini)
+            {
+                UpdateMiniModeDisplay(_lastActiveIndex);
+            }
+        }
+
+        private void ApplyVisualizerState(bool enabled)
+        {
+            _settings.ShowVisualizer = enabled;
+            if (enabled)
+            {
+                VisualizerPanel.Visibility = Visibility.Visible;
+                _visualizerService.Start();
+            }
+            else
+            {
+                VisualizerPanel.Visibility = Visibility.Collapsed;
+                _visualizerService.Stop();
             }
         }
 
@@ -173,7 +291,6 @@ namespace SpotifyLyricsOverlay
             }
             else
             {
-                // Pure transparent background: invisible hit-test brush (#01000000)
                 CardBorder.Background = new SolidColorBrush(Color.FromArgb(1, 0, 0, 0));
                 CardBorder.BorderBrush = Brushes.Transparent;
                 CardBorder.BorderThickness = new Thickness(0);
@@ -189,7 +306,6 @@ namespace SpotifyLyricsOverlay
 
             if (locked)
             {
-                // Hide normal toolbar and settings
                 ToolbarPanel.Visibility = Visibility.Collapsed;
                 SettingsFlyout.Visibility = Visibility.Collapsed;
                 ResizeGripBorder.Visibility = Visibility.Collapsed;
@@ -200,7 +316,6 @@ namespace SpotifyLyricsOverlay
             }
             else
             {
-                // Restore toolbar
                 ToolbarPanel.Visibility = Visibility.Visible;
                 FloatingUnlockBorder.Visibility = Visibility.Collapsed;
                 ResizeGripBorder.Visibility = Visibility.Visible;
@@ -208,12 +323,101 @@ namespace SpotifyLyricsOverlay
                 WindowHelper.SetClickThrough(this, false);
                 if (showToast) ShowToast("🔓 Đã mở khóa • Có thể kéo di chuyển & điều chỉnh");
             }
+
+            _trayService?.UpdateStates(IsVisible, _settings.IsLocked, _settings.StartWithWindows);
+        }
+
+        private void ApplyPreset(string presetName)
+        {
+            _isInitializing = true;
+            _settings.ActivePreset = presetName;
+
+            switch (presetName)
+            {
+                case "Gaming / Valorant":
+                    _settings.DisplayMode = "MiniMode";
+                    _settings.FontSize = 22.0;
+                    _settings.InactiveOpacity = 0.35;
+                    _settings.GlassBackground = false;
+                    _settings.ShowVisualizer = false;
+                    _settings.AutoHideOnPause = true;
+                    Height = 165;
+                    Width = 640;
+                    break;
+
+                case "Mini Island":
+                    _settings.DisplayMode = "MiniMode";
+                    _settings.FontSize = 24.0;
+                    _settings.InactiveOpacity = 0.45;
+                    _settings.GlassBackground = true;
+                    _settings.ShowVisualizer = false;
+                    Height = 165;
+                    Width = 680;
+                    break;
+
+                case "Karaoke":
+                    _settings.DisplayMode = "SpotifyScroll";
+                    _settings.FontSize = 34.0;
+                    _settings.InactiveOpacity = 0.50;
+                    _settings.GlassBackground = true;
+                    _settings.AdaptiveColor = true;
+                    _settings.ShowVisualizer = true;
+                    Height = 480;
+                    Width = 840;
+                    break;
+
+                case "Chill Desktop":
+                default:
+                    _settings.DisplayMode = "SpotifyScroll";
+                    _settings.FontSize = 28.0;
+                    _settings.InactiveOpacity = 0.40;
+                    _settings.GlassBackground = false;
+                    _settings.AdaptiveColor = true;
+                    _settings.ShowVisualizer = false;
+                    _settings.AutoHideOnPause = false;
+                    Height = 440;
+                    Width = 800;
+                    break;
+            }
+
+            _settings.WindowWidth = Width;
+            _settings.WindowHeight = Height;
+
+            ApplySettings();
+            if (presetName == "Gaming / Valorant")
+            {
+                ApplyLock(true, showToast: false);
+            }
+            _isInitializing = false;
+            SettingsService.Save(_settings);
+            ShowToast($"✨ Đã áp dụng Preset: {presetName}");
         }
 
         private void ToggleLock()
         {
             ApplyLock(!_settings.IsLocked, showToast: true);
             SettingsService.Save(_settings);
+        }
+
+        private void ToggleOverlayVisibility()
+        {
+            if (IsVisible)
+            {
+                Hide();
+                _trayService?.UpdateStates(false, _settings.IsLocked, _settings.StartWithWindows);
+            }
+            else
+            {
+                ShowOverlayFromTray();
+            }
+        }
+
+        private void ShowOverlayFromTray()
+        {
+            _hiddenByAutoHide = false;
+            Show();
+            WindowHelper.ForceTopMost(this);
+            _trayService?.UpdateStates(true, _settings.IsLocked, _settings.StartWithWindows);
         }
 
         private void ShowToast(string message)
@@ -240,10 +444,12 @@ namespace SpotifyLyricsOverlay
                     ProgressBarFill.Width = 0;
                     TxtTime.Text = "00:00 / 00:00";
                     StatusPanel.Visibility = Visibility.Visible;
+                    MiniModePanel.Visibility = Visibility.Collapsed;
                     TxtStatus.Text = "Chờ bài hát từ Spotify...";
                     _currentLyrics.Clear();
                     LyricsListPanel.Children.Clear();
                     _lastActiveIndex = -2;
+                    ApplyColorsAndSizes();
                     return;
                 }
 
@@ -252,10 +458,19 @@ namespace SpotifyLyricsOverlay
                 ImgThumbnail.Source = song.Thumbnail;
                 TxtStatus.Text = "Đang tải lyrics Spotify...";
                 StatusPanel.Visibility = Visibility.Visible;
+                MiniModePanel.Visibility = Visibility.Collapsed;
+
+                // Apply adaptive color from album thumbnail immediately
+                ApplyColorsAndSizes();
 
                 try
                 {
-                    var lyrics = await _lyricsService.GetLyricsAsync(song, token);
+                    var lyrics = await _lyricsService.GetLyricsAsync(
+                        song,
+                        _settings.SaveOfflineCache,
+                        _settings.SpotifySpDcCookie,
+                        token);
+
                     if (token.IsCancellationRequested) return;
 
                     _currentLyrics = lyrics;
@@ -264,11 +479,18 @@ namespace SpotifyLyricsOverlay
                     if (_currentLyrics.Count > 0)
                     {
                         StatusPanel.Visibility = Visibility.Collapsed;
+                        if (_settings.ShowTranslation)
+                        {
+                            await _translationService.TranslateLyricsAsync(song.CacheKey, _currentLyrics, _settings.TranslationLanguage, token);
+                            if (token.IsCancellationRequested) return;
+                        }
+
                         PopulateLyricsUI();
+                        ApplyDisplayMode(_settings.DisplayMode);
                     }
                     else
                     {
-                        TxtStatus.Text = "Không tìm thấy lyrics đồng bộ cho bài hát này ♪";
+                        TxtStatus.Text = "Không tìm thấy lyrics đồng bộ ♪ (Kéo thả file .lrc vào đây)";
                         StatusPanel.Visibility = Visibility.Visible;
                         LyricsListPanel.Children.Clear();
                     }
@@ -291,30 +513,34 @@ namespace SpotifyLyricsOverlay
             _targetScrollOffset = 0;
             LyricsScrollViewer.ScrollToVerticalOffset(0);
 
-            var activeColor = ParseColor(_settings.ActiveColor, Colors.White);
             var inactiveColor = ParseColor(_settings.InactiveColor, Colors.White);
-
+            var inactiveBrush = new SolidColorBrush(inactiveColor);
             var font = new FontFamily("pack://application:,,,/Fonts/#Spotify Mix UI, Segoe UI, -apple-system, sans-serif");
 
             for (int i = 0; i < _currentLyrics.Count; i++)
             {
                 var line = _currentLyrics[i];
-                var tb = new TextBlock
+                var container = new StackPanel
                 {
-                    Text = line.Text,
-                    FontSize = _settings.FontSize * 0.86,
-                    FontWeight = FontWeights.SemiBold,
-                    FontFamily = font,
-                    Foreground = new SolidColorBrush(inactiveColor),
-                    Opacity = _settings.InactiveOpacity,
-                    TextAlignment = TextAlignment.Left,
-                    TextWrapping = TextWrapping.Wrap,
+                    Orientation = Orientation.Vertical,
                     Margin = new Thickness(0, 7, 0, 7),
                     Cursor = Cursors.Hand,
                     Tag = line
                 };
 
-                tb.Effect = new DropShadowEffect
+                var tbMain = new TextBlock
+                {
+                    Text = line.Text,
+                    FontSize = _settings.FontSize * 0.86,
+                    FontWeight = FontWeights.SemiBold,
+                    FontFamily = font,
+                    Foreground = inactiveBrush,
+                    Opacity = _settings.InactiveOpacity,
+                    TextAlignment = TextAlignment.Left,
+                    TextWrapping = TextWrapping.Wrap
+                };
+
+                tbMain.Effect = new DropShadowEffect
                 {
                     Color = Colors.Black,
                     BlurRadius = 6,
@@ -322,8 +548,34 @@ namespace SpotifyLyricsOverlay
                     Direction = 315,
                     Opacity = 0.95
                 };
+                container.Children.Add(tbMain);
 
-                tb.MouseLeftButtonDown += async (s, ev) =>
+                if (_settings.ShowTranslation && !string.IsNullOrWhiteSpace(line.TranslatedText))
+                {
+                    var tbTrans = new TextBlock
+                    {
+                        Text = line.TranslatedText,
+                        FontSize = _settings.FontSize * 0.56,
+                        FontStyle = FontStyles.Italic,
+                        FontFamily = font,
+                        Foreground = inactiveBrush,
+                        Opacity = Math.Max(0.25, _settings.InactiveOpacity * 0.85),
+                        TextAlignment = TextAlignment.Left,
+                        TextWrapping = TextWrapping.Wrap,
+                        Margin = new Thickness(0, 2, 0, 0)
+                    };
+                    tbTrans.Effect = new DropShadowEffect
+                    {
+                        Color = Colors.Black,
+                        BlurRadius = 5,
+                        ShadowDepth = 1,
+                        Direction = 315,
+                        Opacity = 0.9
+                    };
+                    container.Children.Add(tbTrans);
+                }
+
+                container.MouseLeftButtonDown += async (s, ev) =>
                 {
                     if (!_settings.IsLocked)
                     {
@@ -332,13 +584,18 @@ namespace SpotifyLyricsOverlay
                     }
                 };
 
-                LyricsListPanel.Children.Add(tb);
+                LyricsListPanel.Children.Add(container);
+            }
+
+            if (_lastActiveIndex >= 0)
+            {
+                UpdateLyricLineStyles(_lastActiveIndex);
             }
         }
 
         private void UpdateLyricLineStyles(int activeIndex)
         {
-            var activeColor = ParseColor(_settings.ActiveColor, Colors.White);
+            var activeColor = GetEffectiveActiveColor();
             var activeBrush = new SolidColorBrush(activeColor);
 
             var inactiveColor = ParseColor(_settings.InactiveColor, Colors.White);
@@ -346,24 +603,62 @@ namespace SpotifyLyricsOverlay
 
             for (int i = 0; i < LyricsListPanel.Children.Count; i++)
             {
-                if (LyricsListPanel.Children[i] is TextBlock tb)
+                if (LyricsListPanel.Children[i] is StackPanel container && container.Children.Count > 0)
                 {
-                    if (i == activeIndex)
+                    bool isActive = (i == activeIndex);
+                    if (container.Children[0] is TextBlock tbMain)
                     {
-                        tb.Foreground = activeBrush;
-                        tb.Opacity = 1.0;
-                        tb.FontWeight = FontWeights.Bold;
-                        tb.FontSize = _settings.FontSize;
+                        tbMain.Foreground = isActive ? activeBrush : inactiveBrush;
+                        tbMain.Opacity = isActive ? 1.0 : _settings.InactiveOpacity;
+                        tbMain.FontWeight = isActive ? FontWeights.Bold : FontWeights.SemiBold;
+                        tbMain.FontSize = isActive ? _settings.FontSize : _settings.FontSize * 0.86;
                     }
-                    else
+
+                    if (container.Children.Count > 1 && container.Children[1] is TextBlock tbTrans)
                     {
-                        tb.Foreground = inactiveBrush;
-                        tb.Opacity = _settings.InactiveOpacity;
-                        tb.FontWeight = FontWeights.SemiBold;
-                        tb.FontSize = _settings.FontSize * 0.86;
+                        tbTrans.Foreground = isActive ? activeBrush : inactiveBrush;
+                        tbTrans.Opacity = isActive ? 0.82 : Math.Max(0.22, _settings.InactiveOpacity * 0.80);
+                        tbTrans.FontSize = isActive ? _settings.FontSize * 0.62 : _settings.FontSize * 0.54;
                     }
                 }
             }
+        }
+
+        private void UpdateMiniModeDisplay(int activeIndex)
+        {
+            if (_currentLyrics.Count == 0) return;
+
+            var activeColor = GetEffectiveActiveColor();
+            var activeBrush = new SolidColorBrush(activeColor);
+            TxtMiniActive.Foreground = activeBrush;
+            TxtMiniActive.FontSize = _settings.FontSize;
+            TxtMiniNext.FontSize = _settings.FontSize * 0.68;
+            TxtMiniNext.Opacity = _settings.InactiveOpacity;
+
+            if (activeIndex < 0 || activeIndex >= _currentLyrics.Count)
+            {
+                TxtMiniActive.Text = "♪ ♫ ♪";
+                TxtMiniTranslation.Visibility = Visibility.Collapsed;
+                TxtMiniNext.Text = _currentLyrics[0].Text;
+                return;
+            }
+
+            var current = _currentLyrics[activeIndex];
+            TxtMiniActive.Text = string.IsNullOrWhiteSpace(current.Text) ? "♪ ♫ ♪" : current.Text;
+
+            if (_settings.ShowTranslation && !string.IsNullOrWhiteSpace(current.TranslatedText))
+            {
+                TxtMiniTranslation.Text = current.TranslatedText;
+                TxtMiniTranslation.Foreground = activeBrush;
+                TxtMiniTranslation.FontSize = _settings.FontSize * 0.60;
+                TxtMiniTranslation.Visibility = Visibility.Visible;
+            }
+            else
+            {
+                TxtMiniTranslation.Visibility = Visibility.Collapsed;
+            }
+
+            TxtMiniNext.Text = (activeIndex + 1 < _currentLyrics.Count) ? _currentLyrics[activeIndex + 1].Text : "";
         }
 
         private void OnPlaybackStateChanged(bool isPlaying)
@@ -372,21 +667,57 @@ namespace SpotifyLyricsOverlay
             {
                 TxtPlayingDot.Opacity = isPlaying ? 1.0 : 0.3;
                 TxtPlayPauseIcon.Text = isPlaying ? "⏸" : "▶";
+
+                if (isPlaying)
+                {
+                    _pausedSince = null;
+                    if (_hiddenByAutoHide)
+                    {
+                        ShowOverlayFromTray();
+                    }
+                }
+                else
+                {
+                    _pausedSince ??= DateTimeOffset.UtcNow;
+                }
             });
+        }
+
+        private void OnSpectrumUpdated(double[] levels)
+        {
+            if (!_settings.ShowVisualizer) return;
+
+            Dispatcher.InvokeAsync(() =>
+            {
+                for (int i = 0; i < _visualizerBars.Count && i < levels.Length; i++)
+                {
+                    _visualizerBars[i].Height = 3.0 + levels[i] * 21.0;
+                }
+            }, DispatcherPriority.Render);
         }
 
         private void SyncTimer_Tick(object? sender, EventArgs e)
         {
-            // 0. Periodic topmost refresh for games like Valorant
-            if (++_topmostTick % 30 == 0)
+            if (++_topmostTick % 30 == 0 && IsVisible)
             {
                 WindowHelper.ForceTopMost(this);
             }
 
-            // 1. Check mouse hover when locked to show Unlock button & handle click-through
+            // Auto-hide on pause check
+            if (_settings.AutoHideOnPause && !_smtcService.IsPlaying && IsVisible)
+            {
+                _pausedSince ??= DateTimeOffset.UtcNow;
+                if ((DateTimeOffset.UtcNow - _pausedSince.Value).TotalSeconds >= _settings.AutoHideDelaySeconds)
+                {
+                    _hiddenByAutoHide = true;
+                    Hide();
+                    _trayService?.UpdateStates(false, _settings.IsLocked, _settings.StartWithWindows);
+                    return;
+                }
+            }
+
             CheckLockedHoverState();
 
-            // 2. Playback & timeline
             var song = _smtcService.CurrentSong;
             if (song.IsEmpty) return;
 
@@ -402,34 +733,40 @@ namespace SpotifyLyricsOverlay
                 ProgressBarFill.Width = progress * maxBarWidth;
             }
 
-            // 3. Lyrics synchronization
-            if (_currentLyrics.Count == 0 || LyricsListPanel.Children.Count == 0) return;
+            if (_currentLyrics.Count == 0) return;
 
             int activeIndex = _lyricsService.GetActiveIndex(_currentLyrics, pos, _settings.SyncOffsetSeconds);
             if (activeIndex != _lastActiveIndex)
             {
                 _lastActiveIndex = activeIndex;
-                UpdateLyricLineStyles(activeIndex);
 
-                if (activeIndex >= 0 && activeIndex < LyricsListPanel.Children.Count)
+                if (_settings.DisplayMode == "MiniMode")
                 {
-                    if (LyricsListPanel.Children[activeIndex] is FrameworkElement activeElem)
+                    UpdateMiniModeDisplay(activeIndex);
+                }
+                else if (LyricsListPanel.Children.Count > 0)
+                {
+                    UpdateLyricLineStyles(activeIndex);
+
+                    if (activeIndex >= 0 && activeIndex < LyricsListPanel.Children.Count)
                     {
-                        try
+                        if (LyricsListPanel.Children[activeIndex] is FrameworkElement activeElem)
                         {
-                            var transform = activeElem.TransformToAncestor(LyricsListPanel);
-                            var point = transform.Transform(new Point(0, 0));
-                            double target = point.Y - (LyricsScrollViewer.ActualHeight * 0.30);
-                            if (target < 0) target = 0;
-                            _targetScrollOffset = target;
+                            try
+                            {
+                                var transform = activeElem.TransformToAncestor(LyricsListPanel);
+                                var point = transform.Transform(new Point(0, 0));
+                                double target = point.Y - (LyricsScrollViewer.ActualHeight * 0.30);
+                                if (target < 0) target = 0;
+                                _targetScrollOffset = target;
+                            }
+                            catch { }
                         }
-                        catch { }
                     }
                 }
             }
 
-            // Smooth spring lerp scroll
-            if (!_userIsScrolling)
+            if (_settings.DisplayMode == "SpotifyScroll" && !_userIsScrolling)
             {
                 double diff = _targetScrollOffset - _currentScrollOffset;
                 if (Math.Abs(diff) > 0.5)
@@ -442,7 +779,7 @@ namespace SpotifyLyricsOverlay
 
         private void CheckLockedHoverState()
         {
-            if (!_settings.IsLocked) return;
+            if (!_settings.IsLocked || !IsVisible) return;
 
             if (WindowHelper.GetCursorPos(out var pt))
             {
@@ -458,20 +795,19 @@ namespace SpotifyLyricsOverlay
                             FloatingUnlockBorder.Visibility = Visibility.Visible;
                         }
 
-                        // Check if cursor is over FloatingUnlockBorder
                         if (FloatingUnlockBorder.ActualWidth > 0 && FloatingUnlockBorder.ActualHeight > 0)
                         {
                             var transform = FloatingUnlockBorder.TransformToAncestor(this);
                             var origin = transform.Transform(new Point(0, 0));
                             var unlockRect = new Rect(origin, new Size(FloatingUnlockBorder.ActualWidth, FloatingUnlockBorder.ActualHeight));
-                            unlockRect.Inflate(8, 8); // Comfortable hit target
+                            unlockRect.Inflate(8, 8);
 
                             if (unlockRect.Contains(winPt))
                             {
                                 if (!_isTemporarilyClickable)
                                 {
                                     _isTemporarilyClickable = true;
-                                    WindowHelper.SetClickThrough(this, false); // Enable mouse click on button!
+                                    WindowHelper.SetClickThrough(this, false);
                                 }
                             }
                             else
@@ -479,14 +815,13 @@ namespace SpotifyLyricsOverlay
                                 if (_isTemporarilyClickable)
                                 {
                                     _isTemporarilyClickable = false;
-                                    WindowHelper.SetClickThrough(this, true); // Keep click-through for desktop!
+                                    WindowHelper.SetClickThrough(this, true);
                                 }
                             }
                         }
                     }
                     else
                     {
-                        // Outside window
                         if (FloatingUnlockBorder.Visibility != Visibility.Collapsed)
                         {
                             FloatingUnlockBorder.Visibility = Visibility.Collapsed;
@@ -498,10 +833,7 @@ namespace SpotifyLyricsOverlay
                         }
                     }
                 }
-                catch
-                {
-                    // Ignore transient point conversion errors
-                }
+                catch { }
             }
         }
 
@@ -525,6 +857,75 @@ namespace SpotifyLyricsOverlay
             return ts.Hours > 0 ? ts.ToString(@"h\:mm\:ss") : ts.ToString(@"mm\:ss");
         }
 
+        // Drag & Drop .lrc support
+        private void Window_DragOver(object sender, DragEventArgs e)
+        {
+            if (e.Data.GetDataPresent(DataFormats.FileDrop))
+            {
+                e.Effects = DragDropEffects.Copy;
+            }
+            else
+            {
+                e.Effects = DragDropEffects.None;
+            }
+            e.Handled = true;
+        }
+
+        private async void Window_Drop(object sender, DragEventArgs e)
+        {
+            if (!e.Data.GetDataPresent(DataFormats.FileDrop)) return;
+            var files = e.Data.GetData(DataFormats.FileDrop) as string[];
+            if (files == null || files.Length == 0) return;
+
+            var file = files[0];
+            if (Path.GetExtension(file).Equals(".lrc", StringComparison.OrdinalIgnoreCase))
+            {
+                await LoadCustomLrcAsync(file);
+            }
+            else
+            {
+                ShowToast("Vui lòng chọn file định dạng .lrc");
+            }
+        }
+
+        private async Task LoadCustomLrcAsync(string filePath)
+        {
+            var song = _smtcService.CurrentSong;
+            if (song.IsEmpty)
+            {
+                ShowToast("Hãy mở 1 bài hát trên Spotify trước khi nạp .lrc");
+                return;
+            }
+
+            try
+            {
+                var lines = await _lyricsService.ImportLrcFileAsync(song, filePath);
+                if (lines.Count > 0)
+                {
+                    _currentLyrics = lines;
+                    _lastActiveIndex = -2;
+                    StatusPanel.Visibility = Visibility.Collapsed;
+
+                    if (_settings.ShowTranslation)
+                    {
+                        await _translationService.TranslateLyricsAsync(song.CacheKey, _currentLyrics, _settings.TranslationLanguage);
+                    }
+
+                    PopulateLyricsUI();
+                    ApplyDisplayMode(_settings.DisplayMode);
+                    ShowToast($"✅ Đã nạp {lines.Count} dòng từ {Path.GetFileName(filePath)}");
+                }
+                else
+                {
+                    ShowToast("File .lrc không có dòng đồng bộ hợp lệ");
+                }
+            }
+            catch (Exception ex)
+            {
+                ShowToast("Lỗi đọc file: " + ex.Message);
+            }
+        }
+
         // Window Events
         private void Window_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
         {
@@ -539,6 +940,7 @@ namespace SpotifyLyricsOverlay
 
         private void Window_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
         {
+            if (_settings.DisplayMode != "SpotifyScroll") return;
             _userIsScrolling = true;
             _currentScrollOffset = LyricsScrollViewer.VerticalOffset - (e.Delta * 0.6);
             if (_currentScrollOffset < 0) _currentScrollOffset = 0;
@@ -575,15 +977,17 @@ namespace SpotifyLyricsOverlay
             }
         }
 
-        // Toolbar Buttons
-        private async void BtnPlayPause_Click(object sender, RoutedEventArgs e)
-        {
-            await _smtcService.TogglePlayPauseAsync();
-        }
+        // Toolbar & Settings Handlers
+        private async void BtnPlayPause_Click(object sender, RoutedEventArgs e) => await _smtcService.TogglePlayPauseAsync();
+        private async void BtnNext_Click(object sender, RoutedEventArgs e) => await _smtcService.SkipNextAsync();
 
-        private async void BtnNext_Click(object sender, RoutedEventArgs e)
+        private void BtnMode_Click(object sender, RoutedEventArgs e)
         {
-            await _smtcService.SkipNextAsync();
+            var next = _settings.DisplayMode == "MiniMode" ? "SpotifyScroll" : "MiniMode";
+            ApplyDisplayMode(next);
+            ChkMiniMode.IsChecked = next == "MiniMode";
+            SettingsService.Save(_settings);
+            ShowToast(next == "MiniMode" ? "📱 Chế độ Mini Mode (1-2 dòng)" : "🎵 Chế độ Spotify Lyrics");
         }
 
         private void BtnCustomize_Click(object sender, RoutedEventArgs e)
@@ -598,9 +1002,84 @@ namespace SpotifyLyricsOverlay
             SettingsFlyout.Visibility = Visibility.Collapsed;
         }
 
+        private void BtnPresetProfile_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is Button btn && btn.Tag is string preset)
+            {
+                ApplyPreset(preset);
+            }
+        }
+
+        private void ChkSetting_Changed(object sender, RoutedEventArgs e)
+        {
+            if (_isInitializing) return;
+            _settings.AdaptiveColor = ChkAdaptiveColor.IsChecked == true;
+            _settings.AutoHideOnPause = ChkAutoHide.IsChecked == true;
+            _settings.SaveOfflineCache = ChkOfflineCache.IsChecked == true;
+            ApplyColorsAndSizes();
+            SettingsService.Save(_settings);
+        }
+
+        private async void ChkTranslation_Changed(object sender, RoutedEventArgs e)
+        {
+            if (_isInitializing) return;
+            _settings.ShowTranslation = ChkShowTranslation.IsChecked == true;
+            SettingsService.Save(_settings);
+
+            var song = _smtcService.CurrentSong;
+            if (_settings.ShowTranslation && _currentLyrics.Count > 0 && !song.IsEmpty)
+            {
+                await _translationService.TranslateLyricsAsync(song.CacheKey, _currentLyrics, _settings.TranslationLanguage);
+            }
+            PopulateLyricsUI();
+            ApplyDisplayMode(_settings.DisplayMode);
+        }
+
+        private async void CmbTargetLang_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (_isInitializing) return;
+            if (CmbTargetLang.SelectedItem is ComboBoxItem item && item.Tag is string lang)
+            {
+                _settings.TranslationLanguage = lang;
+                SettingsService.Save(_settings);
+
+                var song = _smtcService.CurrentSong;
+                if (_settings.ShowTranslation && _currentLyrics.Count > 0 && !song.IsEmpty)
+                {
+                    await _translationService.TranslateLyricsAsync(song.CacheKey, _currentLyrics, lang);
+                    PopulateLyricsUI();
+                    ApplyDisplayMode(_settings.DisplayMode);
+                }
+            }
+        }
+
+        private void ChkMiniMode_Changed(object sender, RoutedEventArgs e)
+        {
+            if (_isInitializing) return;
+            ApplyDisplayMode(ChkMiniMode.IsChecked == true ? "MiniMode" : "SpotifyScroll");
+            SettingsService.Save(_settings);
+        }
+
+        private void ChkVisualizer_Changed(object sender, RoutedEventArgs e)
+        {
+            if (_isInitializing) return;
+            ApplyVisualizerState(ChkVisualizer.IsChecked == true);
+            SettingsService.Save(_settings);
+        }
+
+        private void ChkStartup_Changed(object sender, RoutedEventArgs e)
+        {
+            if (_isInitializing) return;
+            bool enabled = ChkStartup.IsChecked == true;
+            _settings.StartWithWindows = enabled;
+            StartupHelper.SetStartup(enabled);
+            _trayService?.UpdateStates(IsVisible, _settings.IsLocked, enabled);
+            SettingsService.Save(_settings);
+        }
+
         private void SliderFontSize_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
         {
-            if (!IsLoaded) return;
+            if (!IsLoaded || _isInitializing) return;
             _settings.FontSize = Math.Clamp(e.NewValue, 18.0, 48.0);
             TxtFontSizePreview.Text = $"{(int)_settings.FontSize} pt";
             ApplyColorsAndSizes();
@@ -619,6 +1098,8 @@ namespace SpotifyLyricsOverlay
         {
             if (sender is Button btn && btn.Tag is string hex)
             {
+                _settings.AdaptiveColor = false;
+                ChkAdaptiveColor.IsChecked = false;
                 _settings.ActiveColor = hex;
                 TxtHexColor.Text = hex;
                 ApplyColorsAndSizes();
@@ -629,18 +1110,17 @@ namespace SpotifyLyricsOverlay
         private void BtnApplyHex_Click(object sender, RoutedEventArgs e)
         {
             var hex = TxtHexColor.Text?.Trim() ?? "";
-            try
+            var color = ParseColor(hex, Colors.Transparent);
+            if (color != Colors.Transparent)
             {
-                var color = ParseColor(hex, Colors.Transparent);
-                if (color != Colors.Transparent)
-                {
-                    _settings.ActiveColor = hex;
-                    ApplyColorsAndSizes();
-                    SettingsService.Save(_settings);
-                    ShowToast($"Đã áp dụng màu: {hex}");
-                }
+                _settings.AdaptiveColor = false;
+                ChkAdaptiveColor.IsChecked = false;
+                _settings.ActiveColor = hex;
+                ApplyColorsAndSizes();
+                SettingsService.Save(_settings);
+                ShowToast($"Đã áp dụng màu: {hex}");
             }
-            catch
+            else
             {
                 ShowToast("Mã màu không hợp lệ!");
             }
@@ -648,22 +1128,41 @@ namespace SpotifyLyricsOverlay
 
         private void SliderOpacity_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
         {
-            if (!IsLoaded) return;
+            if (!IsLoaded || _isInitializing) return;
             _settings.InactiveOpacity = Math.Clamp(e.NewValue, 0.15, 0.85);
             TxtOpacityPreview.Text = $"{(int)(_settings.InactiveOpacity * 100)}%";
             ApplyColorsAndSizes();
             SettingsService.Save(_settings);
         }
 
-        private void BtnFontUp_Click(object sender, RoutedEventArgs e)
+        private async void BtnImportLrc_Click(object sender, RoutedEventArgs e)
         {
-            SliderFontSize.Value = Math.Min(48, _settings.FontSize + 2);
+            var dlg = new OpenFileDialog
+            {
+                Filter = "LRC Lyrics (*.lrc)|*.lrc|All Files (*.*)|*.*",
+                Title = "Chọn file lời bài hát (.lrc)"
+            };
+            if (dlg.ShowDialog() == true)
+            {
+                await LoadCustomLrcAsync(dlg.FileName);
+            }
         }
 
-        private void BtnFontDown_Click(object sender, RoutedEventArgs e)
+        private void BtnSaveSpDc_Click(object sender, RoutedEventArgs e)
         {
-            SliderFontSize.Value = Math.Max(18, _settings.FontSize - 2);
+            _settings.SpotifySpDcCookie = TxtSpDcCookie.Text?.Trim() ?? "";
+            SettingsService.Save(_settings);
+            var song = _smtcService.CurrentSong;
+            if (!song.IsEmpty)
+            {
+                _lyricsService.InvalidateMemoryCache(song);
+                OnSongChanged(song);
+            }
+            ShowToast("Đã lưu Spotify sp_dc Cookie");
         }
+
+        private void BtnFontUp_Click(object sender, RoutedEventArgs e) => SliderFontSize.Value = Math.Min(48, _settings.FontSize + 2);
+        private void BtnFontDown_Click(object sender, RoutedEventArgs e) => SliderFontSize.Value = Math.Max(18, _settings.FontSize - 2);
 
         private void BtnSyncMinus_Click(object sender, RoutedEventArgs e)
         {
@@ -688,27 +1187,40 @@ namespace SpotifyLyricsOverlay
             SettingsService.Save(_settings);
         }
 
-        private void BtnLock_Click(object sender, RoutedEventArgs e)
+        private void BtnLock_Click(object sender, RoutedEventArgs e) => ToggleLock();
+        private void BtnFloatingUnlock_Click(object sender, MouseButtonEventArgs e) => ToggleLock();
+
+        private void BtnMinimizeTray_Click(object sender, RoutedEventArgs e)
         {
-            ToggleLock();
+            Hide();
+            _trayService?.UpdateStates(false, _settings.IsLocked, _settings.StartWithWindows);
         }
 
-        private void BtnFloatingUnlock_Click(object sender, MouseButtonEventArgs e)
-        {
-            ToggleLock();
-        }
+        private void BtnExitApp_Click(object sender, RoutedEventArgs e) => ExitApplication();
 
-        private void BtnClose_Click(object sender, RoutedEventArgs e)
+        private void ExitApplication()
         {
+            _isExiting = true;
             Close();
         }
 
         private void Window_Closing(object sender, System.ComponentModel.CancelEventArgs e)
         {
+            if (!_isExiting)
+            {
+                // Keep running in system tray unless explicitly exited
+                e.Cancel = true;
+                Hide();
+                _trayService?.UpdateStates(false, _settings.IsLocked, _settings.StartWithWindows);
+                return;
+            }
+
             _syncTimer?.Stop();
             _lyricsCts?.Cancel();
             _scrollResumeTimer?.Stop();
             _toastTimer?.Stop();
+            _visualizerService.Dispose();
+            _trayService?.Dispose();
 
             _settings.WindowLeft = Left;
             _settings.WindowTop = Top;

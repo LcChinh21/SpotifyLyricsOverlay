@@ -3,8 +3,10 @@ using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices.WindowsRuntime;
 using System.Threading.Tasks;
+using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using Windows.Media.Control;
+using SpotifyLyricsOverlay.Helpers;
 using SpotifyLyricsOverlay.Models;
 
 namespace SpotifyLyricsOverlay.Services
@@ -152,7 +154,8 @@ namespace SpotifyLyricsOverlay.Services
                     Duration = timeline?.EndTime ?? TimeSpan.Zero,
                     Position = timeline?.Position ?? TimeSpan.Zero,
                     IsPlaying = _isPlaying,
-                    Thumbnail = thumb
+                    Thumbnail = thumb,
+                    DominantColor = thumb != null ? ColorHelper.ExtractDominantColor(thumb, Colors.White) : null
                 };
 
                 SongChanged?.Invoke(_currentSong);
